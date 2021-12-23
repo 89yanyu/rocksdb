@@ -25,6 +25,7 @@ struct ret_back {
   Status result_;
   IOStatus io_result_;
   bool posix_write_result_;
+  std::vector<Status> results_;
 };
 
 struct async_result {
@@ -50,6 +51,11 @@ struct async_result {
 
     void return_value(Status result) {
       ret_back_promise->result_ = result;
+      ret_back_promise->result_set_ = true;
+    }
+
+    void return_value(std::vector<Status>&& results) {
+      ret_back_promise->results_ = std::move(results);
       ret_back_promise->result_set_ = true;
     }
 
@@ -92,6 +98,8 @@ struct async_result {
   IOStatus io_result() { return ret_back_->io_result_; }
 
   bool posix_result() { return ret_back_->posix_write_result_; }
+
+  std::vector<Status> results() { return std::move(ret_back_->results_); }
 
   std::coroutine_handle<promise_type> h_;
   ret_back *ret_back_;

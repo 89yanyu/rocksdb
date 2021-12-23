@@ -562,6 +562,19 @@ class DB {
         keys, values);
   }
 
+  virtual async_result AsyncMultiGet(
+      const ReadOptions& options,
+      const std::vector<ColumnFamilyHandle*>& column_family,
+      const std::vector<Slice>& keys, std::vector<std::string>* values) = 0;
+  virtual async_result AsyncMultiGet(const ReadOptions& options,
+                                       const std::vector<Slice>& keys,
+                                       std::vector<std::string>* values) {
+    co_return AsyncMultiGet(
+        options,
+        std::vector<ColumnFamilyHandle*>(keys.size(), DefaultColumnFamily()),
+        keys, values);
+  }
+
   virtual std::vector<Status> MultiGet(
       const ReadOptions& /*options*/,
       const std::vector<ColumnFamilyHandle*>& /*column_family*/,
@@ -579,6 +592,15 @@ class DB {
         options,
         std::vector<ColumnFamilyHandle*>(keys.size(), DefaultColumnFamily()),
         keys, values, timestamps);
+  }
+  virtual async_result AsyncMultiGet(
+      const ReadOptions& /*options*/,
+      const std::vector<ColumnFamilyHandle*>& /*column_family*/,
+      const std::vector<Slice>& keys, std::vector<std::string>* /*values*/,
+      std::vector<std::string>* /*timestamps*/) {
+    co_return std::vector<Status>(
+        keys.size(), Status::NotSupported(
+                         "AsyncMultiGet() returning timestamps not implemented."));
   }
 
   // Overloaded MultiGet API that improves performance by batching operations
