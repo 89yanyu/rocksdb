@@ -4,7 +4,6 @@
 //  (found in the LICENSE.Apache file in the root directory).
 
 #pragma once
-#include <liburing.h>
 #include <sys/uio.h>
 
 #include <coroutine>
@@ -71,6 +70,8 @@ struct async_result {
       ret_back_promise->posix_write_result_ = posix_write_result;
       ret_back_promise->result_set_ = true;
     }
+
+    void return_void() {}
 
     promise_type* prev_ = nullptr;
     ret_back* ret_back_promise;

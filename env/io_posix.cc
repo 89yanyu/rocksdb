@@ -712,8 +712,14 @@ async_result PosixRandomAccessFile::AsyncRead(uint64_t offset, size_t n,
     co_await a_result;
   } else {
     std::cout << "PosixRandomAccessFile::AsyncRead enter delegate mode\n";
-    co_await opts.io_uring_option->delegate(data.get(), fd_, offset,
+    auto a_result = opts.io_uring_option->delegate(data.get(), fd_, offset,
                                             IOUringOptions::Ops::Read);
+    
+    co_await a_result;
+    s = a_result.io_result();
+    if (!s.ok()) {
+      co_return s;
+    }
   }
 
   *result = Slice(scratch, n);
