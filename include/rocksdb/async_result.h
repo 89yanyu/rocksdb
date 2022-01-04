@@ -42,7 +42,7 @@ struct async_result {
 
     auto final_suspend() noexcept {
       if (prev_ != nullptr) {
-        auto h = std::coroutine_handle<promise_type>::from_promise(*prev_);
+        auto h = std::coroutine_handle<promise_type>::from_address(prev_);
         h.resume();
       }
 
@@ -73,7 +73,7 @@ struct async_result {
 
     void return_void() {}
 
-    promise_type* prev_ = nullptr;
+    void* prev_ = nullptr;
     ret_back* ret_back_promise;
   };
 
@@ -99,7 +99,13 @@ struct async_result {
       return ret_back_->result_set_;
   }
 
-  void await_suspend(std::coroutine_handle<promise_type> h);
+  template<typename T>
+  void await_suspend(std::coroutine_handle<T> h) {
+    if (!async_)
+      h_.promise().prev_ = h.address();
+    else
+      context_->promise = h.address();
+  }
 
   void await_resume() const noexcept {}
 
@@ -121,13 +127,15 @@ struct async_result {
 struct file_page {
   file_page(int pages) : pages_{pages} {
     iov = (iovec*)calloc(pages, sizeof(struct iovec));
+    processed = 0;
   }
 
   ~file_page() { free(iov); }
 
-  async_result::promise_type* promise;
+  void* promise;
   struct iovec* iov;
   int pages_;
+  size_t processed;
 };
 
 }  // namespace ROCKSDB_NAMESPACE

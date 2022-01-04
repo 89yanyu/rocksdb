@@ -710,24 +710,24 @@ async_result PosixRandomAccessFile::AsyncRead(uint64_t offset, size_t n,
     }
 
     co_await a_result;
+    *result = Slice(scratch, n);
+    co_return IOStatus::OK();
   } else {
     std::cout << "PosixRandomAccessFile::AsyncRead enter delegate mode\n";
-    auto a_result = opts.io_uring_option->delegate(data.get(), fd_, offset,
-                                            IOUringOptions::Ops::Read);
-    
+    auto a_result = opts.io_uring_option->delegate(
+        data.get(), fd_, offset, IOUringOptions::Ops::Read);
+
     co_await a_result;
     s = a_result.io_result();
     if (!s.ok()) {
       co_return s;
     }
+    *result = Slice(scratch, data->processed);
+    co_return IOStatus::OK();
   }
-
-  *result = Slice(scratch, n);
-  co_return IOStatus::OK();
 }
 
-IOStatus PosixRandomAccessFile::MultiRead(FSReadRequest* reqs,
-                                          size_t num_reqs,
+IOStatus PosixRandomAccessFile::MultiRead(FSReadRequest* reqs, size_t num_reqs,
                                           const IOOptions& options,
                                           IODebugContext* dbg) {
   if (use_direct_io()) {

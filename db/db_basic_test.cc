@@ -3890,6 +3890,7 @@ class DBBasicTestWithAsyncIO : public DBAsyncTestBase {
         std::cout << "io_uring_wait_cqe returned with  with " << cqe->res
                   << "\n";
         FilePage* rdata = (FilePage*)io_uring_cqe_get_data(cqe);
+        rdata->processed = cqe->res;
 
         OnResume(rdata->promise);
         io_uring_cqe_seen(io_uring_.get(), cqe);

@@ -2322,6 +2322,8 @@ async_result Version::AsyncGet(const ReadOptions& read_options,
     *status = Status::NotFound();  // Use an empty error message for speed
     co_return Status::NotFound();
   }
+
+  co_return Status::OK();
 }
 
 void Version::MultiGet(const ReadOptions& read_options, MultiGetRange* range,
