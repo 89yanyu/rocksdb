@@ -713,7 +713,6 @@ async_result PosixRandomAccessFile::AsyncRead(uint64_t offset, size_t n,
     *result = Slice(scratch, n);
     co_return IOStatus::OK();
   } else {
-    std::cout << "PosixRandomAccessFile::AsyncRead enter delegate mode\n";
     auto a_result = opts.io_uring_option->delegate(
         data.get(), fd_, offset, IOUringOptions::Ops::Read);
 
