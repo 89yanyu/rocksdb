@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include <liburing.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -1406,21 +1405,10 @@ enum ReadTier {
 struct IOUringOptions {
   enum class Ops { Read, Write };
 
-  struct io_uring* ioring;
-  std::atomic<int> sqe_count;
-  std::function<async_result(FilePage*, int, uint64_t, Ops)> delegate;
+  std::function<AsyncResult<ssize_t>(int, char*, size_t, size_t, Ops)> delegate;
 
-  IOUringOptions(struct io_uring* ring) : ioring{ring}, sqe_count{0} {
-    assert(ring != nullptr);
-  }
-
-  IOUringOptions(
-      std::function<async_result(FilePage*, int, uint64_t, Ops)>&& deleg)
-      : ioring{nullptr},
-        sqe_count{0},
-        delegate{std::forward<
-            std::function<async_result(FilePage*, int, uint64_t, Ops)>>(
-            deleg)} {}
+  template <typename T>
+  IOUringOptions(T&& deleg) : delegate{std::forward<T>(deleg)} {}
 };
 
 // Options that control read operations

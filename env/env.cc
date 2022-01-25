@@ -111,7 +111,7 @@ class LegacyRandomAccessFileWrapper : public FSRandomAccessFile {
     return status_to_io_status(target_->Read(offset, n, result, scratch));
   }
 
-  async_result AsyncRead(uint64_t offset, size_t n,
+  AsyncResult<IOStatus> AsyncRead(uint64_t offset, size_t n,
                          const IOOptions& /*options*/, Slice* result,
                          char* scratch,
                          IODebugContext* /*dbg*/) const override {
@@ -223,12 +223,12 @@ class LegacyWritableFileWrapper : public FSWritableFile {
                   IODebugContext* /*dbg*/) override {
     return status_to_io_status(target_->Append(data));
   }
-  async_result AsyncAppend(const Slice& data, const IOOptions& /*options*/,
+  AsyncResult<IOStatus> AsyncAppend(const Slice& data, const IOOptions& /*options*/,
                            IODebugContext* /*dbg*/) override {
     (void)data;
     throw "Not implemented";
   }
-  async_result AsyncAppend(const Slice& data, const IOOptions& /*options*/,
+  AsyncResult<IOStatus> AsyncAppend(const Slice& data, const IOOptions& /*options*/,
                            const DataVerificationInfo& /*verification_info*/,
                            IODebugContext* /*dbg*/) override {
     (void)data;

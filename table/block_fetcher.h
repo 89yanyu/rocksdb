@@ -67,7 +67,7 @@ class BlockFetcher {
   }
 
   IOStatus ReadBlockContents();
-  async_result AsyncReadBlockContents();
+  AsyncResult<IOStatus> AsyncReadBlockContents();
   CompressionType get_compression_type() const { return compression_type_; }
 
 #ifndef NDEBUG

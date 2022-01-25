@@ -82,7 +82,7 @@ class Writer {
 
   IOStatus AddRecord(const Slice& slice);
 
-  async_result AsyncAddRecord(const Slice& slice);
+  AsyncResult<IOStatus> AsyncAddRecord(const Slice& slice);
 
   WritableFileWriter* file() { return dest_.get(); }
   const WritableFileWriter* file() const { return dest_.get(); }
@@ -91,7 +91,7 @@ class Writer {
 
   IOStatus WriteBuffer();
 
-  async_result AsyncWriteBuffer();
+  AsyncResult<IOStatus> AsyncWriteBuffer();
 
   IOStatus Close();
 

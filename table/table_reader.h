@@ -110,7 +110,7 @@ class TableReader {
                      const SliceTransform* prefix_extractor,
                      bool skip_filters = false) = 0;
 
-  virtual async_result AsyncGet(const ReadOptions& readOptions,
+  virtual AsyncResult<Status> AsyncGet(const ReadOptions& readOptions,
                                 const Slice& key, GetContext* get_context,
                                 const SliceTransform* prefix_extractor,
                                 bool skip_filters = false) {

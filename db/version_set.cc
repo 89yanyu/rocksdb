@@ -2148,7 +2148,7 @@ void Version::Get(const ReadOptions& read_options, const LookupKey& k,
   }
 }
 
-async_result Version::AsyncGet(const ReadOptions& read_options,
+AsyncResult<void> Version::AsyncGet(const ReadOptions& read_options,
                                const LookupKey& k, PinnableSlice* value,
                                std::string* timestamp, Status* status,
                                MergeContext* merge_context,
@@ -2221,7 +2221,7 @@ async_result Version::AsyncGet(const ReadOptions& read_options,
                         fp.IsHitFileLastInLevel()),
         fp.GetHitFileLevel(), max_file_size_for_l0_meta_pin_);
     co_await a_result;
-    *status = a_result.result();
+    *status = a_result.release();
 
     // TODO: examine the behavior for corrupted key
     if (timer_enabled) {
@@ -2232,7 +2232,7 @@ async_result Version::AsyncGet(const ReadOptions& read_options,
       if (db_statistics_ != nullptr) {
         get_context.ReportCounters();
       }
-      co_return Status::OK();
+      co_return;
     }
 
     // report the counters before returning
@@ -2270,25 +2270,25 @@ async_result Version::AsyncGet(const ReadOptions& read_options,
               if (status->IsIncomplete()) {
                 get_context.MarkKeyMayExist();
               }
-              co_return Status::OK();
+              co_return;
             }
           }
         }
 
-        co_return Status::OK();
+        co_return;
       case GetContext::kDeleted:
         // Use empty error message for speed
         *status = Status::NotFound();
-        co_return Status::OK();
+        co_return;
       case GetContext::kCorrupt:
         *status = Status::Corruption("corrupted key for ", user_key);
-        co_return Status::OK();
+        co_return;
       case GetContext::kUnexpectedBlobIndex:
         ROCKS_LOG_ERROR(info_log_, "Encounter unexpected blob index.");
         *status = Status::NotSupported(
             "Encounter unexpected blob index. Please open DB with "
             "ROCKSDB_NAMESPACE::blob_db::BlobDB instead.");
-        co_return Status::OK();
+        co_return;
     }
     f = fp.GetNextFile();
   }
@@ -2298,12 +2298,12 @@ async_result Version::AsyncGet(const ReadOptions& read_options,
   if (GetContext::kMerge == get_context.State()) {
     if (!do_merge) {
       *status = Status::OK();
-      co_return Status::OK();
+      co_return;
     }
     if (!merge_operator_) {
       *status = Status::InvalidArgument(
           "merge_operator is not properly initialized.");
-      co_return Status::OK();
+      co_return;
     }
     // merge_operands are in saver and we hit the beginning of the key history
     // do a final merge of nullptr and operands;
@@ -2320,10 +2320,10 @@ async_result Version::AsyncGet(const ReadOptions& read_options,
       *key_exists = false;
     }
     *status = Status::NotFound();  // Use an empty error message for speed
-    co_return Status::NotFound();
+    co_return;
   }
 
-  co_return Status::OK();
+  co_return;
 }
 
 void Version::MultiGet(const ReadOptions& read_options, MultiGetRange* range,

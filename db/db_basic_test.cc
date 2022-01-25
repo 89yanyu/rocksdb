@@ -3844,115 +3844,62 @@ TEST_P(DBBasicTestDeadline, IteratorDeadline) {
   Close();
 }
 
-using s_io_uring = struct io_uring;
 class DBBasicTestWithAsyncIO : public DBAsyncTestBase {
  public:
   DBBasicTestWithAsyncIO()
-      : DBAsyncTestBase("db_basic_asyncio_test"),
-        io_uring_{new s_io_uring},
-        shutDown_{false} {
-    auto ret = io_uring_queue_init(io_uring_size_, io_uring_.get(), 0);
-    if (ret < 0) throw "io_uring_queue_init failed";
-  }
+      : DBAsyncTestBase("db_basic_asyncio_test"), shutDown_{false} {}
 
   ~DBBasicTestWithAsyncIO() {
     shutDown_.store(true, std::memory_order_relaxed);
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    io_uring_queue_exit(io_uring_.get());
   }
-
-  s_io_uring* io_uring() { return this->io_uring_.get(); }
 
   void shutdown() { shutDown_ = true; }
 
-  bool RunAsyncTest(std::function<async_result(DBAsyncTestBase*)> test_func) {
-    std::cout << "Enter RunAsyncTest\n";
-    bool success = false;
+  struct IOOp {
+    int fd;
+    char* buf;
+    uint64_t size;
+    uint64_t offset;
+    AsyncResult<ssize_t>::promise_type pr;
+  };
 
-    auto r = test_func(this);
-    (void)r;
+  std::deque<IOOp>& io_queue() { return io_queue_; }
+
+  void RunAsyncTest(
+      std::function<AsyncResult<void>(DBBasicTestWithAsyncIO*)> test_func) {
+    std::cout << "Enter RunAsyncTest\n";
+
+    test_func(this);
 
     std::cout << "Run test_func returned\n";
 
-    struct io_uring_cqe* cqe;
-    // struct __kernel_timespec ts;
-    std::cout << "Enter IOCompletion io_uring:" << io_uring_.get() << "\n";
-
-    // msec_to_ts(&ts, 100);
-    while (true) {
-      auto ret = io_uring_wait_cqe(io_uring_.get(), &cqe);
-      if (ret != 0) {
-        std::cout << "io_uring_wait_cqe failed with " << ret << "\n";
-        continue;
-      }
-
-      if (ret == 0 && cqe->res >= 0) {
-        std::cout << "io_uring_wait_cqe returned with  with " << cqe->res
-                  << "\n";
-        FilePage* rdata = (FilePage*)io_uring_cqe_get_data(cqe);
-        rdata->processed = cqe->res;
-
-        OnResume(rdata->promise);
-        io_uring_cqe_seen(io_uring_.get(), cqe);
-
-        if (shutDown_.load(std::memory_order_relaxed)) break;
-      }
+    while (!io_queue_.empty()) {
+      auto& io_op = io_queue_.front();
+      ssize_t ret = pread(io_op.fd, io_op.buf, io_op.size, io_op.offset);
+      io_op.pr.return_value(ret);
+      std::coroutine_handle<>::from_address(io_op.pr.prev).resume();
+      io_queue_.pop_front();
     }
-    return success;
+    EXPECT_TRUE(shutDown_);
   }
 
  private:
-  static void OnResume(async_result::promise_type* promise) {
-    auto h = std::coroutine_handle<async_result::promise_type>::from_promise(
-        *promise);
-    h.resume();
-  }
-
-  static void msec_to_ts(struct __kernel_timespec* ts, unsigned int msec) {
-    ts->tv_sec = msec / 1000;
-    ts->tv_nsec = (msec % 1000) * 1000000;
-  }
-
-  std::unique_ptr<s_io_uring> io_uring_;
-  const int io_uring_size_ = 1024;
+  std::deque<IOOp> io_queue_;
   std::atomic<bool> shutDown_;
 };
 
-static async_result SimpleAsyncGetTest(DBAsyncTestBase* testBase) {
+static AsyncResult<> SimpleAsyncGetTest(DBBasicTestWithAsyncIO* testBase) {
   std::cout << "Enter SimpleAsyncGetTest\n";
-  auto io_uring = dynamic_cast<DBBasicTestWithAsyncIO*>(testBase)->io_uring();
-  auto io_uring_option =
-      testBase->test_delegation()
-          ? new IOUringOptions(
-                [io_uring](FilePage* data, int fd, uint64_t offset,
-                           IOUringOptions::Ops op) -> async_result {
-                  (void)op;
-
-                  std::cout << "io_uring:" << (void*)io_uring
-                            << " data:" << (void*)data << " fd:" << fd
-                            << " offset:" << offset << "\n";
-                  async_result a_result(true, data);
-                  auto sqe = io_uring_get_sqe(io_uring);
-                  if (sqe == nullptr) {
-                    // submission queue is full
-                    co_return rocksdb::IOStatus::IOError(
-                        rocksdb::Status::SubCode::kIOUringSqeFull);
-                  }
-
-                  io_uring_prep_readv(sqe, fd, data->iov, data->pages_, offset);
-                  io_uring_sqe_set_data(sqe, data);
-                  auto ret = io_uring_submit(io_uring);
-                  if (ret < 0) {
-                    co_return rocksdb::IOStatus::IOError(
-                        rocksdb::Status::SubCode::kIOUringSubmitError,
-                        strerror(-ret));
-                  }
-
-                  co_await a_result;
-                  co_return rocksdb::IOStatus::OK();
-                })
-          : new IOUringOptions(
-                dynamic_cast<DBBasicTestWithAsyncIO*>(testBase)->io_uring());
+  auto io_uring_option = new IOUringOptions(
+      [testBase](int fd, char* buf, size_t len, size_t offset,
+                 IOUringOptions::Ops op) mutable -> AsyncResult<ssize_t> {
+        (void)op;
+        testBase->io_queue().emplace_back(DBBasicTestWithAsyncIO::IOOp{
+            fd, buf, len, offset, AsyncResult<ssize_t>::promise_type{}});
+        auto r = testBase->io_queue().back().pr.get_return_object();
+        co_await r;
+        co_return r.release();
+      });
   ReadOptions options;
   options.io_uring_option = io_uring_option;
   options.read_tier = kPersistedTier;
@@ -3968,49 +3915,25 @@ static async_result SimpleAsyncGetTest(DBAsyncTestBase* testBase) {
   delete v;
   if (r == "e1") {
     std::cout << "SimpleAsyncGetTest succeeded:" << r << "\n";
-    co_return Status::OK();
   } else {
-    std::cout << "SimpleAsyncGetTest failed:" << asyncResult.result().ToString()
-              << " " << asyncResult.io_result().ToString() << " " << r << "\n";
-    co_return Status::NotFound();
+    std::cout << "SimpleAsyncGetTest failed:" << asyncResult.value.ToString()
+              << " " << r << "\n";
   }
+  co_return;
 }
 
-static async_result SimpleAsyncMultiGetTest(DBAsyncTestBase* testBase) {
+static AsyncResult<> SimpleAsyncMultiGetTest(DBBasicTestWithAsyncIO* testBase) {
   std::cout << "Enter SimpleAsyncMultiGetTest" << std::endl;
-  auto io_uring = dynamic_cast<DBBasicTestWithAsyncIO*>(testBase)->io_uring();
-  auto io_uring_option =
-      testBase->test_delegation()
-          ? new IOUringOptions(
-                [io_uring](FilePage* data, int fd, uint64_t offset,
-                           IOUringOptions::Ops op) -> async_result {
-                  (void)op;
-
-                  std::cout << "io_uring:" << (void*)io_uring
-                            << " data:" << (void*)data << " fd:" << fd
-                            << " offset:" << offset << std::endl;
-                  async_result a_result(true, data);
-                  auto sqe = io_uring_get_sqe(io_uring);
-                  if (sqe == nullptr) {
-                    // submission queue is full
-                    co_return rocksdb::IOStatus::IOError(
-                        rocksdb::Status::SubCode::kIOUringSqeFull);
-                  }
-
-                  io_uring_prep_readv(sqe, fd, data->iov, data->pages_, offset);
-                  io_uring_sqe_set_data(sqe, data);
-                  auto ret = io_uring_submit(io_uring);
-                  if (ret < 0) {
-                    co_return rocksdb::IOStatus::IOError(
-                        rocksdb::Status::SubCode::kIOUringSubmitError,
-                        strerror(-ret));
-                  }
-
-                  co_await a_result;
-                  co_return rocksdb::IOStatus::OK();
-                })
-          : new IOUringOptions(
-                dynamic_cast<DBBasicTestWithAsyncIO*>(testBase)->io_uring());
+  auto io_uring_option = new IOUringOptions(
+      [testBase](int fd, char* buf, size_t len, size_t offset,
+                 IOUringOptions::Ops op) mutable -> AsyncResult<ssize_t> {
+        (void)op;
+        testBase->io_queue().emplace_back(DBBasicTestWithAsyncIO::IOOp{
+            fd, buf, len, offset, AsyncResult<ssize_t>::promise_type{}});
+        auto r = testBase->io_queue().back().pr.get_return_object();
+        co_await r;
+        co_return r.release();
+      });
   ReadOptions options;
   options.io_uring_option = io_uring_option;
   options.read_tier = kPersistedTier;
@@ -4023,13 +3946,13 @@ static async_result SimpleAsyncMultiGetTest(DBAsyncTestBase* testBase) {
   dynamic_cast<DBBasicTestWithAsyncIO*>(testBase)->shutdown();
   delete io_uring_option;
 
-  auto statuses = asyncResult.results();
+  auto statuses = asyncResult.release();
 
   if (statuses.size() != 2 || values.size() != 2) {
     std::cout << "SimpleAsyncMultiGetTest failed, statuses_size:"
               << statuses.size() << " values_size:" << values.size()
               << std::endl;
-    co_return Status::NotFound();
+    co_return;
   }
 
   auto r = values[0];
@@ -4038,7 +3961,7 @@ static async_result SimpleAsyncMultiGetTest(DBAsyncTestBase* testBase) {
   } else {
     std::cout << "SimpleAsyncMultiGetTest failed:" << statuses[0].ToString()
               << " " << r << std::endl;
-    co_return Status::NotFound();
+    co_return;
   }
 
   r = values[1];
@@ -4047,9 +3970,8 @@ static async_result SimpleAsyncMultiGetTest(DBAsyncTestBase* testBase) {
   } else {
     std::cout << "SimpleAsyncMultiGetTest failed:" << statuses[1].ToString()
               << " " << r << std::endl;
-    co_return Status::NotFound();
   }
-  co_return Status::OK();
+  co_return;
 }
 
 TEST_F(DBBasicTestWithAsyncIO, AsyncGet) {
@@ -4063,18 +3985,6 @@ TEST_F(DBBasicTestWithAsyncIO, AsyncGet) {
   this->RunAsyncTest(SimpleAsyncGetTest);
 }
 
-TEST_F(DBBasicTestWithAsyncIO, AsyncDeletgateGet) {
-  WriteOptions wo;
-  wo.disableWAL = true;
-  auto s = this->db()->Put(wo, "bar", "e1");
-  std::cout << "Put status:" << s.ToString() << "\n";
-  s = this->db()->Flush(FlushOptions());
-  std::cout << "Flush status:" << s.ToString() << "\n";
-  this->set_test_delegation(true);
-  this->RunAsyncTest(SimpleAsyncGetTest);
-  this->set_test_delegation(false);
-}
-
 TEST_F(DBBasicTestWithAsyncIO, AsyncMultiGet) {
   WriteOptions wo;
   wo.disableWAL = true;
@@ -4086,20 +3996,6 @@ TEST_F(DBBasicTestWithAsyncIO, AsyncMultiGet) {
   std::cout << "Flush status:" << s.ToString() << "\n";
 
   this->RunAsyncTest(SimpleAsyncMultiGetTest);
-}
-
-TEST_F(DBBasicTestWithAsyncIO, AsyncDeletgateMultiGet) {
-  WriteOptions wo;
-  wo.disableWAL = true;
-  auto s = this->db()->Put(wo, "bar", "e1");
-  std::cout << "Put status:" << s.ToString() << "\n";
-  s = this->db()->Put(wo, "foo", "f2");
-  std::cout << "Put status:" << s.ToString() << "\n";
-  s = this->db()->Flush(FlushOptions());
-  std::cout << "Flush status:" << s.ToString() << "\n";
-  this->set_test_delegation(true);
-  this->RunAsyncTest(SimpleAsyncMultiGetTest);
-  this->set_test_delegation(false);
 }
 
 // Param 0: If true, set read_options.deadline

@@ -848,13 +848,6 @@ class DBAsyncTestBase : public testing::Test {
     db_ = nullptr;
   }
 
-  // if set to true, IO_URING handling logic is delegated to lambda passed by
-  // caller.
-  bool test_delegation() { return test_delegation_; }
-  void set_test_delegation(bool test_delegation) {
-    test_delegation_ = test_delegation;
-  }
-
   DB* db() { return db_; }
 
  private:

@@ -4,138 +4,94 @@
 //  (found in the LICENSE.Apache file in the root directory).
 
 #pragma once
-#include <sys/uio.h>
-
 #include <coroutine>
-#include <iostream>
-#include <memory>
-#include <vector>
+#include <type_traits>
 
-#include "io_status.h"
-#include "rocksdb/status.h"
+#include "rocksdb/rocksdb_namespace.h"
 
 namespace ROCKSDB_NAMESPACE {
 
-struct file_page;
-using FilePage = struct file_page;
+namespace detail {
+template <typename U>
+struct value_t {
+  U value;
 
-// used to store co_return value
-struct ret_back {
-  // whether the result has be co_returned
-  bool result_set_ = false;
-  // different return type by coroutine
-  Status result_;
-  IOStatus io_result_;
-  bool posix_write_result_;
-  std::vector<Status> results_;
+  // implicit conversions
+  operator U&() & { return this->value; }
+  operator const U&() const& { return this->value; }
+  operator U&&() && { return std::move(this->value); }
+  U release() { return std::move(this->value); }
 };
+struct empty_t {};
+};  // namespace detail
 
-struct async_result {
-  struct promise_type {
-    async_result get_return_object() {
-      auto h = std::coroutine_handle<promise_type>::from_promise(*this);
-      ret_back_promise = new ret_back{};
-      return async_result(h, *ret_back_promise);
-    }
-
-    auto initial_suspend() { return std::suspend_never{}; }
-
-    auto final_suspend() noexcept {
-      if (prev_ != nullptr) {
-        auto h = std::coroutine_handle<promise_type>::from_address(prev_);
-        h.resume();
+template <typename T = void>
+struct AsyncResult
+    : public std::conditional_t<std::is_void_v<T>, detail::empty_t,
+                                detail::value_t<T>> {
+  template <typename U>
+  struct return_base_t {
+    AsyncResult<U>* result;
+    ~return_base_t() {
+      if (result) {
+        result->pr = nullptr;
       }
+    }
+    void release_result() { result = nullptr; }
+  };
+  template <typename U>
+  struct return_value_t : public return_base_t<U> {
+    template <typename V>
+    void return_value(V&& value) {
+      if (this->result) {
+        this->result->value = std::forward<V>(value);
+        this->result->done = true;
+      }
+    }
+  };
+  struct return_void_t : public return_base_t<void> {
+    void return_void() {
+      if (this->result) {
+        this->result->done = true;
+      }
+    }
+  };
+  struct promise_type
+      : public std::conditional_t<std::is_void_v<T>, return_void_t,
+                                  return_value_t<T>> {
+    void* prev = nullptr;
 
+    AsyncResult<T> get_return_object() {
+      AsyncResult<T> res(this);
+      this->result = &res;
+      return res;
+    }
+    auto initial_suspend() { return std::suspend_never{}; }
+    auto final_suspend() {
+      if (prev) {
+        std::coroutine_handle<>::from_address(prev).resume();
+      }
       return std::suspend_never{};
     }
-
-    void unhandled_exception() { std::exit(1); }
-
-    void return_value(Status result) {
-      ret_back_promise->result_ = result;
-      ret_back_promise->result_set_ = true;
-    }
-
-    void return_value(std::vector<Status>&& results) {
-      ret_back_promise->results_ = std::move(results);
-      ret_back_promise->result_set_ = true;
-    }
-
-    void return_value(IOStatus io_result) {
-      ret_back_promise->io_result_ = io_result;
-      ret_back_promise->result_set_ = true;
-    }
-
-    void return_value(bool posix_write_result) {
-      ret_back_promise->posix_write_result_ = posix_write_result;
-      ret_back_promise->result_set_ = true;
-    }
-
-    void return_void() {}
-
-    void* prev_ = nullptr;
-    ret_back* ret_back_promise;
+    auto unhandled_exception() { abort(); }
   };
+  promise_type* pr;
+  bool done;
 
-  async_result() : ret_back_(nullptr), async_(false) {}
-
-  async_result(bool async, FilePage* context)
-      : ret_back_(nullptr), async_(async), context_{context} {}
-
-  async_result(std::coroutine_handle<promise_type> h, ret_back& ret_back)
-      : h_{h} {
-    ret_back_ = &ret_back;
+  AsyncResult(promise_type* promise) : pr(promise), done(false) {}
+  ~AsyncResult() {
+    if (pr) {
+      pr->release_result();
+    }
   }
-
-  ~async_result() {
-    delete ret_back_;
-    ret_back_ = nullptr;
+  bool await_ready() const noexcept { return done; }
+  template <typename U>
+  void await_suspend(std::coroutine_handle<U> h) {
+    if (pr) {
+      pr->prev = h.address();
+    }
   }
-
-  bool await_ready() const noexcept {
-    if (async_ || ret_back_ == nullptr)
-      return false;
-    else
-      return ret_back_->result_set_;
-  }
-
-  template<typename T>
-  void await_suspend(std::coroutine_handle<T> h) {
-    if (!async_)
-      h_.promise().prev_ = h.address();
-    else
-      context_->promise = h.address();
-  }
-
   void await_resume() const noexcept {}
-
-  Status result() { return ret_back_->result_; }
-
-  IOStatus io_result() { return ret_back_->io_result_; }
-
-  bool posix_result() { return ret_back_->posix_write_result_; }
-
-  std::vector<Status> results() { return std::move(ret_back_->results_); }
-
-  std::coroutine_handle<promise_type> h_;
-  ret_back* ret_back_;
-  bool async_ = false;
-  FilePage* context_;
-};
-
-// used for liburing read or write
-struct file_page {
-  file_page(int pages) : pages_{pages} {
-    iov = (iovec*)calloc(pages, sizeof(struct iovec));
-    processed = 0;
-  }
-
-  ~file_page() { free(iov); }
-
-  void* promise;
-  struct iovec* iov;
-  int pages_;
-  size_t processed;
 };
 
 }  // namespace ROCKSDB_NAMESPACE

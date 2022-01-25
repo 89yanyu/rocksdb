@@ -479,7 +479,7 @@ Status TableCache::Get(const ReadOptions& options,
   return s;
 }
 
-async_result TableCache::AsyncGet(
+AsyncResult<Status> TableCache::AsyncGet(
     const ReadOptions& options,
     const InternalKeyComparator& internal_comparator,
     const FileMetaData& file_meta, const Slice& k, GetContext* get_context,
@@ -537,7 +537,7 @@ async_result TableCache::AsyncGet(
       auto a_result =
           t->AsyncGet(options, k, get_context, prefix_extractor, skip_filters);
       co_await a_result;
-      s = a_result.result();
+      s = a_result.release();
       get_context->SetReplayLog(nullptr);
     } else if (options.read_tier == kBlockCacheTier && s.IsIncomplete()) {
       // Couldn't find Table in cache but treat as kFound if no_io set

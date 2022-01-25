@@ -153,7 +153,7 @@ class DBImpl : public DB {
                      ColumnFamilyHandle* column_family, const Slice& key,
                      const Slice& value) override;
 
-  virtual async_result AsyncPut(const WriteOptions& options,
+  virtual AsyncResult<Status> AsyncPut(const WriteOptions& options,
                                 ColumnFamilyHandle* column_family,
                                 const Slice& key, const Slice& value) override;
 
@@ -173,7 +173,7 @@ class DBImpl : public DB {
   virtual Status Write(const WriteOptions& options,
                        WriteBatch* updates) override;
 
-  virtual async_result AsyncWrite(const WriteOptions& options,
+  virtual AsyncResult<Status> AsyncWrite(const WriteOptions& options,
                                   WriteBatch* updates) override;
 
   using DB::Get;
@@ -184,7 +184,7 @@ class DBImpl : public DB {
                      ColumnFamilyHandle* column_family, const Slice& key,
                      PinnableSlice* value, std::string* timestamp) override;
 
-  virtual async_result AsyncGet(const ReadOptions& options,
+  virtual AsyncResult<Status> AsyncGet(const ReadOptions& options,
                                 ColumnFamilyHandle* column_family,
                                 const Slice& key, PinnableSlice* value,
                                 std::string* timestamp) override;
@@ -216,7 +216,7 @@ class DBImpl : public DB {
       const std::vector<Slice>& keys, std::vector<std::string>* values,
       std::vector<std::string>* timestamps) override;
   using DB::AsyncMultiGet;
-  virtual async_result AsyncMultiGet(
+  virtual AsyncResult<std::vector<Status>> AsyncMultiGet(
       const ReadOptions& options,
       const std::vector<ColumnFamilyHandle*>& column_family,
       const std::vector<Slice>& keys, std::vector<std::string>* values,
@@ -365,10 +365,10 @@ class DBImpl : public DB {
       const FlushOptions& options,
       const std::vector<ColumnFamilyHandle*>& column_families) override;
   virtual Status FlushWAL(bool sync) override;
-  virtual async_result AsyncFlushWAL(bool sync) override;
+  virtual AsyncResult<Status> AsyncFlushWAL(bool sync) override;
   bool TEST_WALBufferIsEmpty(bool lock = true);
   virtual Status SyncWAL() override;
-  virtual async_result AsSyncWAL() override;
+  virtual AsyncResult<Status> AsSyncWAL() override;
   virtual Status LockWAL() override;
   virtual Status UnlockWAL() override;
 
@@ -555,7 +555,7 @@ class DBImpl : public DB {
   Status GetImpl(const ReadOptions& options, const Slice& key,
                  GetImplOptions& get_impl_options);
 
-  async_result AsyncGetImpl(const ReadOptions& options, const Slice& key,
+  AsyncResult<Status> AsyncGetImpl(const ReadOptions& options, const Slice& key,
                             GetImplOptions& get_impl_options);
 
   // If `snapshot` == kMaxSequenceNumber, set a recent one inside the file.
@@ -1292,7 +1292,7 @@ class DBImpl : public DB {
                    size_t batch_cnt = 0,
                    PreReleaseCallback* pre_release_callback = nullptr);
 
-  async_result AsyncWriteImpl(
+  AsyncResult<Status> AsyncWriteImpl(
       const WriteOptions& options, WriteBatch* updates,
       WriteCallback* callback = nullptr, uint64_t* log_used = nullptr,
       uint64_t log_ref = 0, bool disable_memtable = false,
@@ -1305,7 +1305,7 @@ class DBImpl : public DB {
                             bool disable_memtable = false,
                             uint64_t* seq_used = nullptr);
 
-  async_result AsyncPipelinedWriteImpl(const WriteOptions& options,
+  AsyncResult<Status> AsyncPipelinedWriteImpl(const WriteOptions& options,
                                        WriteBatch* updates,
                                        WriteCallback* callback = nullptr,
                                        uint64_t* log_used = nullptr,
@@ -1340,7 +1340,7 @@ class DBImpl : public DB {
       PreReleaseCallback* pre_release_callback, const AssignOrder assign_order,
       const PublishLastSeq publish_last_seq, const bool disable_memtable);
 
-  async_result AsyncWriteImplWALOnly(
+  AsyncResult<Status> AsyncWriteImplWALOnly(
       WriteThread* write_thread, const WriteOptions& options,
       WriteBatch* updates, WriteCallback* callback, uint64_t* log_used,
       const uint64_t log_ref, uint64_t* seq_used, const size_t sub_batch_cnt,
@@ -1766,25 +1766,25 @@ class DBImpl : public DB {
   IOStatus WriteToWAL(const WriteBatch& merged_batch, log::Writer* log_writer,
                       uint64_t* log_used, uint64_t* log_size);
 
-  async_result AsyncWriteToWAL(const WriteBatch& merged_batch,
-                               log::Writer* log_writer, uint64_t* log_used,
-                               uint64_t* log_size);
+  AsyncResult<IOStatus> AsyncWriteToWAL(const WriteBatch& merged_batch,
+                                        log::Writer* log_writer,
+                                        uint64_t* log_used, uint64_t* log_size);
 
   IOStatus WriteToWAL(const WriteThread::WriteGroup& write_group,
                       log::Writer* log_writer, uint64_t* log_used,
                       bool need_log_sync, bool need_log_dir_sync,
                       SequenceNumber sequence);
 
-  async_result AsyncWriteToWAL(const WriteThread::WriteGroup& write_group,
-                               log::Writer* log_writer, uint64_t* log_used,
-                               bool need_log_sync, bool need_log_dir_sync,
-                               SequenceNumber sequence);
+  AsyncResult<IOStatus> AsyncWriteToWAL(
+      const WriteThread::WriteGroup& write_group, log::Writer* log_writer,
+      uint64_t* log_used, bool need_log_sync, bool need_log_dir_sync,
+      SequenceNumber sequence);
 
   IOStatus ConcurrentWriteToWAL(const WriteThread::WriteGroup& write_group,
                                 uint64_t* log_used,
                                 SequenceNumber* last_sequence, size_t seq_inc);
 
-  async_result AsyncConcurrentWriteToWAL(
+  AsyncResult<IOStatus> AsyncConcurrentWriteToWAL(
       const WriteThread::WriteGroup& write_group, uint64_t* log_used,
       SequenceNumber* last_sequence, size_t seq_inc);
 

@@ -119,7 +119,7 @@ TBlockIter* BlockBasedTable::NewDataBlockIterator(
 }
 
 template <typename TBlockIter>
-async_result BlockBasedTable::AsyncNewDataBlockIterator(
+AsyncResult<TBlockIter*> BlockBasedTable::AsyncNewDataBlockIterator(
     const ReadOptions& ro, const BlockHandle& handle, TBlockIter* input_iter,
     BlockType block_type, GetContext* get_context,
     BlockCacheLookupContext* lookup_context, Status s,
@@ -131,7 +131,7 @@ async_result BlockBasedTable::AsyncNewDataBlockIterator(
   *result_iterator = iter;
   if (!s.ok()) {
     iter->Invalidate(s);
-    co_return Status::OK();
+    co_return iter;
   }
 
   CachableEntry<UncompressionDict> uncompression_dict;
@@ -142,7 +142,7 @@ async_result BlockBasedTable::AsyncNewDataBlockIterator(
         &uncompression_dict);
     if (!s.ok()) {
       iter->Invalidate(s);
-      co_return Status::OK();
+      co_return iter;
     }
   }
 
@@ -156,12 +156,12 @@ async_result BlockBasedTable::AsyncNewDataBlockIterator(
                          get_context, lookup_context, for_compaction,
                          /* use_cache */ true, /* wait_for_cache */ true);
   co_await result;
-  s = result.result();
+  s = result.release();
 
   if (!s.ok()) {
     assert(block.IsEmpty());
     iter->Invalidate(s);
-    co_return Status::OK();
+    co_return iter;
   }
 
   assert(block.GetValue() != nullptr);
@@ -216,7 +216,7 @@ async_result BlockBasedTable::AsyncNewDataBlockIterator(
   }
 
   block.TransferTo(iter);
-  co_return Status::OK();
+  co_return iter;
 }
 
 // Convert an uncompressed data block (i.e CachableEntry<Block>)

@@ -55,11 +55,9 @@ Status DBImpl::Write(const WriteOptions& write_options, WriteBatch* my_batch) {
   return WriteImpl(write_options, my_batch, nullptr, nullptr);
 }
 
-async_result DBImpl::AsyncWrite(const WriteOptions& write_options,
+AsyncResult<Status> DBImpl::AsyncWrite(const WriteOptions& write_options,
                                 WriteBatch* my_batch) {
-  auto result = AsyncWriteImpl(write_options, my_batch, nullptr, nullptr);
-  co_await result;
-  co_return result.result();
+  return AsyncWriteImpl(write_options, my_batch, nullptr, nullptr);
 }
 
 #ifndef ROCKSDB_LITE
@@ -474,7 +472,7 @@ Status DBImpl::WriteImpl(const WriteOptions& write_options,
   return status;
 }
 
-async_result DBImpl::AsyncWriteImpl(const WriteOptions& write_options,
+AsyncResult<Status> DBImpl::AsyncWriteImpl(const WriteOptions& write_options,
                                     WriteBatch* my_batch,
                                     WriteCallback* callback, uint64_t* log_used,
                                     uint64_t log_ref, bool disable_memtable,
@@ -529,7 +527,7 @@ async_result DBImpl::AsyncWriteImpl(const WriteOptions& write_options,
         log_ref, seq_used, batch_cnt, pre_release_callback, assign_order,
         kDontPublishLastSeq, disable_memtable);
     co_await result;
-    co_return result.result();
+    co_return result.release();
   }
 
   if (immutable_db_options_.unordered_write) {
@@ -545,7 +543,7 @@ async_result DBImpl::AsyncWriteImpl(const WriteOptions& write_options,
         &seq, sub_batch_cnt, pre_release_callback, kDoAssignOrder,
         kDoPublishLastSeq, disable_memtable);
     co_await result;
-    Status status = result.result();
+    Status status = result.release();
     TEST_SYNC_POINT("DBImpl::WriteImpl:UnorderedWriteAfterWriteWAL");
     if (!status.ok()) {
       co_return status;
@@ -566,7 +564,7 @@ async_result DBImpl::AsyncWriteImpl(const WriteOptions& write_options,
         AsyncPipelinedWriteImpl(write_options, my_batch, callback, log_used,
                                 log_ref, disable_memtable, seq_used);
     co_await result;
-    co_return result.result();
+    co_return result.release();
   }
 
   PERF_TIMER_GUARD(write_pre_and_post_process_time);
@@ -747,7 +745,7 @@ async_result DBImpl::AsyncWriteImpl(const WriteOptions& write_options,
             AsyncWriteToWAL(write_group, log_writer, log_used, need_log_sync,
                             need_log_dir_sync, last_sequence + 1);
         co_await result;
-        io_s = result.io_result();
+        io_s = result.release();
       }
     } else {
       if (status.ok() && !write_options.disableWAL) {
@@ -757,7 +755,7 @@ async_result DBImpl::AsyncWriteImpl(const WriteOptions& write_options,
         auto result = AsyncConcurrentWriteToWAL(write_group, log_used,
                                                 &last_sequence, seq_inc);
         co_await result;
-        io_s = result.io_result();
+        io_s = result.release();
       } else {
         // Otherwise we inc seq number for memtable writes
         last_sequence = versions_->FetchAddLastAllocatedSequence(seq_inc);
@@ -862,11 +860,11 @@ async_result DBImpl::AsyncWriteImpl(const WriteOptions& write_options,
       if (manual_wal_flush_) {
         auto result = AsyncFlushWAL(true);
         co_await result;
-        status = result.result();
+        status = result.release();
       } else {
         auto result = AsSyncWAL();
         co_await result;
-        status = result.result();
+        status = result.release();
       }
     }
   }
@@ -1048,7 +1046,7 @@ Status DBImpl::PipelinedWriteImpl(const WriteOptions& write_options,
   return w.FinalStatus();
 }
 
-async_result DBImpl::AsyncPipelinedWriteImpl(
+AsyncResult<Status> DBImpl::AsyncPipelinedWriteImpl(
     const WriteOptions& write_options, WriteBatch* my_batch,
     WriteCallback* callback, uint64_t* log_used, uint64_t log_ref,
     bool disable_memtable, uint64_t* seq_used) {
@@ -1130,7 +1128,7 @@ async_result DBImpl::AsyncPipelinedWriteImpl(
           AsyncWriteToWAL(wal_write_group, log_writer, log_used, need_log_sync,
                           need_log_dir_sync, current_sequence);
       co_await result;
-      io_s = result.io_result();
+      io_s = result.release();
       w.status = io_s;
     }
 
@@ -1443,7 +1441,7 @@ Status DBImpl::WriteImplWALOnly(
   return status;
 }
 
-async_result DBImpl::AsyncWriteImplWALOnly(
+AsyncResult<Status> DBImpl::AsyncWriteImplWALOnly(
     WriteThread* write_thread, const WriteOptions& write_options,
     WriteBatch* my_batch, WriteCallback* callback, uint64_t* log_used,
     const uint64_t log_ref, uint64_t* seq_used, const size_t sub_batch_cnt,
@@ -1555,7 +1553,7 @@ async_result DBImpl::AsyncWriteImplWALOnly(
     auto result = AsyncConcurrentWriteToWAL(write_group, log_used,
                                             &last_sequence, seq_inc);
     co_await result;
-    io_s = result.io_result();
+    io_s = result.release();
     status = io_s;
   } else {
     // Otherwise we inc seq number to do solely the seq allocation
@@ -1585,11 +1583,11 @@ async_result DBImpl::AsyncWriteImplWALOnly(
     if (manual_wal_flush_) {
       auto result = AsyncFlushWAL(true);
       co_await result;
-      status = result.result();
+      status = result.release();
     } else {
       auto result = AsSyncWAL();
       co_await result;
-      status = result.result();
+      status = result.release();
     }
   }
   PERF_TIMER_START(write_pre_and_post_process_time);
@@ -1862,7 +1860,7 @@ IOStatus DBImpl::WriteToWAL(const WriteBatch& merged_batch,
   return io_s;
 }
 
-async_result DBImpl::AsyncWriteToWAL(const WriteBatch& merged_batch,
+AsyncResult<IOStatus> DBImpl::AsyncWriteToWAL(const WriteBatch& merged_batch,
                                      log::Writer* log_writer,
                                      uint64_t* log_used, uint64_t* log_size) {
   assert(log_size != nullptr);
@@ -1882,7 +1880,7 @@ async_result DBImpl::AsyncWriteToWAL(const WriteBatch& merged_batch,
 
   auto result = log_writer->AsyncAddRecord(log_entry);
   co_await result;
-  IOStatus io_s = result.io_result();
+  IOStatus io_s = result.release();
 
   if (UNLIKELY(needs_locking)) {
     log_write_mutex_.Unlock();
@@ -1983,7 +1981,7 @@ IOStatus DBImpl::WriteToWAL(const WriteThread::WriteGroup& write_group,
   return io_s;
 }
 
-async_result DBImpl::AsyncWriteToWAL(const WriteThread::WriteGroup& write_group,
+AsyncResult<IOStatus> DBImpl::AsyncWriteToWAL(const WriteThread::WriteGroup& write_group,
                                      log::Writer* log_writer,
                                      uint64_t* log_used, bool need_log_sync,
                                      bool need_log_dir_sync,
@@ -2008,7 +2006,7 @@ async_result DBImpl::AsyncWriteToWAL(const WriteThread::WriteGroup& write_group,
   uint64_t log_size;
   auto result = AsyncWriteToWAL(*merged_batch, log_writer, log_used, &log_size);
   co_await result;
-  io_s = result.io_result();
+  io_s = result.release();
   if (to_be_cached_state) {
     cached_recoverable_state_ = *to_be_cached_state;
     cached_recoverable_state_empty_ = false;
@@ -2026,7 +2024,7 @@ async_result DBImpl::AsyncWriteToWAL(const WriteThread::WriteGroup& write_group,
     for (auto& log : logs_) {
       auto res = log.writer->file()->AsSync(immutable_db_options_.use_fsync);
       co_await res;
-      io_s = res.io_result();
+      io_s = res.release();
       if (!io_s.ok()) {
         break;
       }
@@ -2106,7 +2104,7 @@ IOStatus DBImpl::ConcurrentWriteToWAL(
   return io_s;
 }
 
-async_result DBImpl::AsyncConcurrentWriteToWAL(
+AsyncResult<IOStatus> DBImpl::AsyncConcurrentWriteToWAL(
     const WriteThread::WriteGroup& write_group, uint64_t* log_used,
     SequenceNumber* last_sequence, size_t seq_inc) {
   IOStatus io_s;
@@ -2137,7 +2135,7 @@ async_result DBImpl::AsyncConcurrentWriteToWAL(
   uint64_t log_size;
   auto result = AsyncWriteToWAL(*merged_batch, log_writer, log_used, &log_size);
   co_await result;
-  io_s = result.io_result();
+  io_s = result.release();
   if (to_be_cached_state) {
     cached_recoverable_state_ = *to_be_cached_state;
     cached_recoverable_state_empty_ = false;
@@ -2958,7 +2956,7 @@ Status DB::Put(const WriteOptions& opt, ColumnFamilyHandle* column_family,
   return Write(opt, &batch);
 }
 
-async_result DBImpl::AsyncPut(const WriteOptions& opt,
+AsyncResult<Status> DBImpl::AsyncPut(const WriteOptions& opt,
                               ColumnFamilyHandle* column_family,
                               const Slice& key, const Slice& value) {
   if (nullptr == opt.timestamp) {
@@ -2972,7 +2970,7 @@ async_result DBImpl::AsyncPut(const WriteOptions& opt,
     }
     auto result = AsyncWrite(opt, &batch);
     co_await result;
-    co_return result.result();
+    co_return result.release();
   }
   const Slice* ts = opt.timestamp;
   assert(nullptr != ts);
@@ -2992,7 +2990,7 @@ async_result DBImpl::AsyncPut(const WriteOptions& opt,
 
   auto result = AsyncWrite(opt, &batch);
   co_await result;
-  co_return result.result();
+  co_return result.release();
 }
 
 Status DB::Delete(const WriteOptions& opt, ColumnFamilyHandle* column_family,

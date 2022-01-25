@@ -1332,7 +1332,7 @@ Status DBImpl::FlushWAL(bool sync) {
   return SyncWAL();
 }
 
-async_result DBImpl::AsyncFlushWAL(bool sync) {
+AsyncResult<Status> DBImpl::AsyncFlushWAL(bool sync) {
   if (manual_wal_flush_) {
     IOStatus io_s;
     {
@@ -1341,7 +1341,7 @@ async_result DBImpl::AsyncFlushWAL(bool sync) {
       log::Writer* cur_log_writer = logs_.back().writer;
       auto result = cur_log_writer->AsyncWriteBuffer();
       co_await result;
-      io_s = result.io_result();
+      io_s = result.release();
     }
     if (!io_s.ok()) {
       ROCKS_LOG_ERROR(immutable_db_options_.info_log, "WAL flush error %s",
@@ -1350,11 +1350,11 @@ async_result DBImpl::AsyncFlushWAL(bool sync) {
       // future writes
       IOStatusCheck(io_s);
       // whether sync or not, we should abort the rest of function upon error
-      co_return std::move(io_s);
+      co_return io_s;
     }
     if (!sync) {
       ROCKS_LOG_DEBUG(immutable_db_options_.info_log, "FlushWAL sync=false");
-      co_return std::move(io_s);
+      co_return io_s;
     }
   }
   if (!sync) {
@@ -1364,7 +1364,7 @@ async_result DBImpl::AsyncFlushWAL(bool sync) {
   ROCKS_LOG_DEBUG(immutable_db_options_.info_log, "FlushWAL sync=true");
   auto result = AsSyncWAL();
   co_await result;
-  co_return result.result();
+  co_return result.release();
 }
 
 Status DBImpl::SyncWAL() {
@@ -1442,7 +1442,7 @@ Status DBImpl::SyncWAL() {
   return status;
 }
 
-async_result DBImpl::AsSyncWAL() {
+AsyncResult<Status> DBImpl::AsSyncWAL() {
   autovector<log::Writer*, 1> logs_to_sync;
   bool need_log_dir_sync;
   uint64_t current_log_number;
@@ -1488,7 +1488,7 @@ async_result DBImpl::AsSyncWAL() {
     auto result =
         log->file()->AsSyncWithoutFlush(immutable_db_options_.use_fsync);
     co_await result;
-    io_s = result.io_result();
+    io_s = result.release();
     if (!io_s.ok()) {
       status = io_s;
       break;
@@ -1820,15 +1820,15 @@ Status DBImpl::Get(const ReadOptions& read_options,
   return GetImpl(read_options, key, get_impl_options);
 }
 
-async_result DBImpl::AsyncGet(const ReadOptions& read_options,
+AsyncResult<Status> DBImpl::AsyncGet(const ReadOptions& read_options,
                               ColumnFamilyHandle* column_family,
                               const Slice& key, PinnableSlice* value,
                               std::string* timestamp) {
   GetImplOptions get_impl_options = {
       .column_family = column_family, .value = value, .timestamp = timestamp};
-  auto result = AsyncGetImpl(read_options, key, get_impl_options);
-  co_await result;
-  co_return result.result();
+  auto r = AsyncGetImpl(read_options, key, get_impl_options);
+  co_await r;
+  co_return r.release();
 }
 
 namespace {
@@ -2069,7 +2069,7 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
   return s;
 }
 
-async_result DBImpl::AsyncGetImpl(const ReadOptions& read_options,
+AsyncResult<Status> DBImpl::AsyncGetImpl(const ReadOptions& read_options,
                                   const Slice& key,
                                   GetImplOptions& get_impl_options) {
   GetWithTimestampReadCallback read_cb(0);  // Will call Refresh
@@ -2108,7 +2108,7 @@ async_result DBImpl::AsyncGetImpl(const ReadOptions& read_options,
   if (lookup_status == DBImpl::MemtableLookupStatus::Failed) co_return s;
 
   if (lookup_status == DBImpl::MemtableLookupStatus::NotFound) {
-    auto r = sv->current->AsyncGet(
+    co_await sv->current->AsyncGet(
         read_options, lkey, get_impl_options.value, timestamp, &s,
         &merge_context, &max_covering_tombstone_seq,
         get_impl_options.get_value ? get_impl_options.value_found : nullptr,
@@ -2116,8 +2116,6 @@ async_result DBImpl::AsyncGetImpl(const ReadOptions& read_options,
         get_impl_options.get_value ? get_impl_options.callback : nullptr,
         get_impl_options.get_value ? get_impl_options.is_blob_index : nullptr,
         get_impl_options.get_value);
-    co_await r;
-    (void)r;  // hold async_result after await
     RecordTick(stats_, MEMTABLE_MISS);
   }
 
@@ -2347,14 +2345,17 @@ std::vector<Status> DBImpl::MultiGet(
   return stat_list;
 }
 
-async_result DBImpl::AsyncMultiGet(
+AsyncResult<std::vector<Status>> DBImpl::AsyncMultiGet(
     const ReadOptions& read_options,
     const std::vector<ColumnFamilyHandle*>& column_family,
     const std::vector<Slice>& keys, std::vector<std::string>* values,
     std::vector<std::string>* timestamps) {
-  PERF_CPU_TIMER_GUARD(get_cpu_nanos, immutable_db_options_.clock);
-  StopWatch sw(immutable_db_options_.clock, stats_, DB_MULTIGET);
-  PERF_TIMER_GUARD(get_snapshot_time);
+  size_t num_keys = keys.size();
+  std::vector<Status> stat_list(num_keys);
+  {
+    PERF_CPU_TIMER_GUARD(get_cpu_nanos, immutable_db_options_.clock);
+    StopWatch sw(immutable_db_options_.clock, stats_, DB_MULTIGET);
+    PERF_TIMER_GUARD(get_snapshot_time);
 
 #ifndef NDEBUG
   for (const auto* cfh : column_family) {
@@ -2411,8 +2412,6 @@ async_result DBImpl::AsyncMultiGet(
   MergeContext merge_context;
 
   // Note: this always resizes the values array
-  size_t num_keys = keys.size();
-  std::vector<Status> stat_list(num_keys);
   values->resize(num_keys);
   if (timestamps) {
     timestamps->resize(num_keys);
@@ -2472,13 +2471,11 @@ async_result DBImpl::AsyncMultiGet(
     if (!done) {
       PinnableSlice pinnable_val;
       PERF_TIMER_GUARD(get_from_output_files_time);
-      auto r = super_version->current->AsyncGet(
+      co_await super_version->current->AsyncGet(
           read_options, lkey, &pinnable_val, timestamp, &s, &merge_context,
           &max_covering_tombstone_seq, /*value_found=*/nullptr,
           /*key_exists=*/nullptr,
           /*seq=*/nullptr, read_callback);
-      co_await r;
-      (void)r;  // hold async_result after await
       value->assign(pinnable_val.data(), pinnable_val.size());
       RecordTick(stats_, MEMTABLE_MISS);
     }
@@ -2530,7 +2527,7 @@ async_result DBImpl::AsyncMultiGet(
   RecordInHistogram(stats_, BYTES_PER_MULTIGET, bytes_read);
   PERF_COUNTER_ADD(multiget_read_bytes, bytes_read);
   PERF_TIMER_STOP(get_post_process_time);
-
+  }
   co_return stat_list;
 }
 

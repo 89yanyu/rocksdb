@@ -321,13 +321,13 @@ IOStatus BlockFetcher::ReadBlockContents() {
   return io_status_;
 }
 
-async_result BlockFetcher::AsyncReadBlockContents() {
+AsyncResult<IOStatus> BlockFetcher::AsyncReadBlockContents() {
   if (TryGetUncompressBlockFromPersistentCache()) {
     compression_type_ = kNoCompression;
 #ifndef NDEBUG
     contents_->is_raw_block = true;
 #endif  // NDEBUG
-    co_return Status::OK();
+    co_return IOStatus::OK();
   }
   if (TryGetFromPrefetchBuffer()) {
     if (!io_status_.ok()) {
@@ -345,7 +345,7 @@ async_result BlockFetcher::AsyncReadBlockContents() {
             &direct_io_buf_, for_compaction_);
         co_await a_result;
 
-        io_status_ = a_result.io_result();
+        io_status_ = a_result.release();
         PERF_COUNTER_ADD(block_read_count, 1);
         used_buf_ = const_cast<char*>(slice_.data());
       } else {
@@ -356,7 +356,7 @@ async_result BlockFetcher::AsyncReadBlockContents() {
                              &slice_, used_buf_, nullptr, for_compaction_);
         co_await a_result;
 
-        io_status_ = a_result.io_result();
+        io_status_ = a_result.release();
         PERF_COUNTER_ADD(block_read_count, 1);
 #ifndef NDEBUG
         if (slice_.data() == &stack_buf_[0]) {

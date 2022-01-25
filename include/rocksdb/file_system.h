@@ -726,7 +726,7 @@ class FSRandomAccessFile {
                         Slice* result, char* scratch,
                         IODebugContext* dbg) const = 0;
 
-  virtual async_result AsyncRead(uint64_t offset, size_t n,
+  virtual AsyncResult<IOStatus> AsyncRead(uint64_t offset, size_t n,
                                  const IOOptions& options, Slice* result,
                                  char* scratch, IODebugContext* dbg) const = 0;
 
@@ -834,7 +834,7 @@ class FSWritableFile {
   virtual IOStatus Append(const Slice& data, const IOOptions& options,
                           IODebugContext* dbg) = 0;
 
-  virtual async_result AsyncAppend(const Slice& data, const IOOptions& options,
+  virtual AsyncResult<IOStatus> AsyncAppend(const Slice& data, const IOOptions& options,
                                    IODebugContext* dbg) = 0;
 
   // Append data with verification information.
@@ -851,13 +851,11 @@ class FSWritableFile {
     return Append(data, options, dbg);
   }
 
-  virtual async_result AsyncAppend(
+  virtual AsyncResult<IOStatus> AsyncAppend(
       const Slice& data, const IOOptions& options,
       const DataVerificationInfo& verification_info, IODebugContext* dbg) {
     (void)verification_info;
-    auto result = AsyncAppend(data, options, dbg);
-    co_await result;
-    co_return result.io_result();
+    return AsyncAppend(data, options, dbg);
   }
   // PositionedAppend data to the specified offset. The new EOF after append
   // must be larger than the previous EOF. This is to be used when writes are
@@ -886,7 +884,7 @@ class FSWritableFile {
     return IOStatus::NotSupported("PositionedAppend");
   }
 
-  virtual async_result AsyncPositionedAppend(const Slice& /* data */,
+  virtual AsyncResult<IOStatus> AsyncPositionedAppend(const Slice& /* data */,
                                              uint64_t /* offset */,
                                              const IOOptions& /*options*/,
                                              IODebugContext* /*dbg*/) {
@@ -909,7 +907,7 @@ class FSWritableFile {
     return IOStatus::NotSupported("PositionedAppend");
   }
 
-  virtual async_result AsyncPositionedAppend(
+  virtual AsyncResult<IOStatus> AsyncPositionedAppend(
       const Slice& /* data */, uint64_t /* offset */,
       const IOOptions& /*options*/,
       const DataVerificationInfo& /* verification_info */,
@@ -929,7 +927,7 @@ class FSWritableFile {
   virtual IOStatus Flush(const IOOptions& options, IODebugContext* dbg) = 0;
   virtual IOStatus Sync(const IOOptions& options,
                         IODebugContext* dbg) = 0;  // sync data
-  virtual async_result AsSync(const IOOptions& options, IODebugContext* dbg) {
+  virtual AsyncResult<IOStatus> AsSync(const IOOptions& options, IODebugContext* dbg) {
     (void)options;
     (void)dbg;
     co_return IOStatus::NotSupported("AsSync");
@@ -945,10 +943,8 @@ class FSWritableFile {
     return Sync(options, dbg);
   }
 
-  virtual async_result AsFsync(const IOOptions& options, IODebugContext* dbg) {
-    auto result = AsSync(options, dbg);
-    co_await result;
-    co_return result.io_result();
+  virtual AsyncResult<IOStatus> AsFsync(const IOOptions& options, IODebugContext* dbg) {
+    return AsSync(options, dbg);
   }
 
   // true if Sync() and Fsync() are safe to call concurrently with Append()
@@ -1023,13 +1019,13 @@ class FSWritableFile {
     return IOStatus::OK();
   }
 
-  virtual async_result AsRangeSync(uint64_t /*offset*/, uint64_t /*nbytes*/,
+  virtual AsyncResult<IOStatus> AsRangeSync(uint64_t /*offset*/, uint64_t /*nbytes*/,
                                    const IOOptions& options,
                                    IODebugContext* dbg) {
     if (strict_bytes_per_sync_) {
       auto result = AsSync(options, dbg);
       co_await result;
-      co_return result.io_result();
+      co_return result.release();
     }
     co_return IOStatus::OK();
   }
@@ -1462,7 +1458,7 @@ class FSRandomAccessFileWrapper : public FSRandomAccessFile {
     return target_->Read(offset, n, options, result, scratch, dbg);
   }
 
-  async_result AsyncRead(uint64_t offset, size_t n, const IOOptions& options,
+  AsyncResult<IOStatus> AsyncRead(uint64_t offset, size_t n, const IOOptions& options,
                          Slice* result, char* scratch,
                          IODebugContext* dbg) const override {
     return target_->AsyncRead(offset, n, options, result, scratch, dbg);
@@ -1522,18 +1518,18 @@ class FSWritableFileWrapper : public FSWritableFile {
                   IODebugContext* dbg) override {
     return target_->Append(data, options, verification_info, dbg);
   }
-  async_result AsyncAppend(const Slice& data, const IOOptions& options,
+  AsyncResult<IOStatus> AsyncAppend(const Slice& data, const IOOptions& options,
                            IODebugContext* dbg) override {
     auto result = target_->AsyncAppend(data, options, dbg);
     co_await result;
-    co_return result.io_result();
+    co_return result.release();
   }
-  async_result AsyncAppend(const Slice& data, const IOOptions& options,
+  AsyncResult<IOStatus> AsyncAppend(const Slice& data, const IOOptions& options,
                            const DataVerificationInfo& verification_info,
                            IODebugContext* dbg) override {
     auto result = target_->AsyncAppend(data, options, verification_info, dbg);
     co_await result;
-    co_return result.io_result();
+    co_return result.release();
   }
   IOStatus PositionedAppend(const Slice& data, uint64_t offset,
                             const IOOptions& options,
